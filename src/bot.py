@@ -2,12 +2,20 @@
 Punto de entrada del bot de Telegram.
 """
 
-from telegram.ext import ApplicationBuilder, CallbackQueryHandler, CommandHandler
+from telegram.ext import (
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    MessageHandler,
+    filters,
+)
 
 from config import TELEGRAM_BOT_TOKEN
 from handlers import (
     cancel_command,
     get_add_conversation_handler,
+    get_delete_conversation_handler,
+    get_edit_conversation_handler,
     help_command,
     menu_button_handler,
     recent_command,
@@ -24,8 +32,10 @@ def main() -> None:
     # Construimos la aplicación con el token
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Registramos el flujo interactivo de /add (incluye entry_point para botón menu_add)
+    # Registramos los flujos interactivos (ConversationHandlers tienen prioridad)
     app.add_handler(get_add_conversation_handler())
+    app.add_handler(get_edit_conversation_handler())
+    app.add_handler(get_delete_conversation_handler())
 
     # Registramos los comandos individuales
     app.add_handler(CommandHandler("start", start_command))
@@ -33,9 +43,14 @@ def main() -> None:
     app.add_handler(CommandHandler("recent", recent_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
 
-    # Registramos el handler de botones del menú (recent, help, cancel)
+    # Registramos el handler de botones auxiliares del menú (recent, help, cancel)
     app.add_handler(
         CallbackQueryHandler(menu_button_handler, pattern=r"^menu_(recent|help|cancel)$")
+    )
+
+    # Mensajes de texto libres (ej: "hola", "buenas") fuera de conversación responden como /start
+    app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, start_command)
     )
 
     print("Bot en ejecución. Presiona Ctrl + C para detenerlo.")

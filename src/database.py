@@ -269,7 +269,7 @@ def get_recent_watches(limit: int = 10) -> list[dict]:
             m.director
         FROM watch_history w
         JOIN movies m ON w.movie_id = m.id
-        ORDER BY w.watched_at DESC, w.id DESC
+        ORDER BY DATE(w.watched_at) DESC, w.id DESC
         LIMIT ?
         """,
         (limit,),
@@ -278,3 +278,147 @@ def get_recent_watches(limit: int = 10) -> list[dict]:
     connection.close()
 
     return [dict(row) for row in rows]
+
+
+def get_watch_by_id(watch_id: int) -> dict | None:
+    """
+    Obtiene todos los datos de un registro de visualización específico
+    junto con la información de la película asociada.
+    """
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT
+            w.id AS watch_id,
+            w.watched_at,
+            w.rating,
+            w.review,
+            w.rewatch,
+            w.created_at AS watch_created_at,
+            m.id AS movie_id,
+            m.tmdb_id,
+            m.title,
+            m.original_title,
+            m.release_date,
+            m.poster_path,
+            m.director,
+            m.genres
+        FROM watch_history w
+        JOIN movies m ON w.movie_id = m.id
+        WHERE w.id = ?
+        """,
+        (watch_id,),
+    )
+    row = cursor.fetchone()
+    connection.close()
+
+    if row:
+        return dict(row)
+    return None
+
+
+def delete_watch_by_id(watch_id: int) -> bool:
+    """
+    Elimina un registro de visualización por su ID.
+    Devuelve True si se eliminó, False si no existía.
+    """
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute("DELETE FROM watch_history WHERE id = ?", (watch_id,))
+    deleted = cursor.rowcount > 0
+
+    connection.commit()
+    connection.close()
+
+    return deleted
+
+
+def update_watch_history(
+    watch_id: int,
+    watched_at: date | str | None = None,
+    rating: float | None = None,
+    review: str | None = None,
+    rewatch: int | None = None,
+    clear_review: bool = False,
+) -> bool:
+    """
+    Actualiza campos específicos de un registro de visualización.
+    """
+    updates = []
+    params = []
+
+    if watched_at is not None:
+        val = watched_at.isoformat() if isinstance(watched_at, date) else str(watched_at)
+        updates.append("watched_at = ?")
+        params.append(val)
+
+    if rating is not None:
+        updates.append("rating = ?")
+        params.append(rating)
+
+    if clear_review:
+        updates.append("review = NULL")
+    elif review is not None:
+        updates.append("review = ?")
+        params.append(review)
+
+    if rewatch is not None:
+        updates.append("rewatch = ?")
+        params.append(rewatch)
+
+    if not updates:
+        return False
+
+    params.append(watch_id)
+
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    sql = f"UPDATE watch_history SET {', '.join(updates)} WHERE id = ?"
+    cursor.execute(sql, tuple(params))
+    updated = cursor.rowcount > 0
+
+    connection.commit()
+    connection.close()
+
+    return updated
+
+
+def search_watches_by_title(query: str, limit: int = 10) -> list[dict]:
+    """
+    Busca en el historial de visualizaciones por coincidencia en el título de la película.
+    """
+    connection = get_connection()
+    cursor = connection.cursor()
+
+    cursor.execute(
+        """
+        SELECT
+            w.id AS watch_id,
+            w.watched_at,
+            w.rating,
+            w.review,
+            w.rewatch,
+            m.id AS movie_id,
+            m.tmdb_id,
+            m.title,
+            m.original_title,
+            m.release_date,
+            m.poster_path,
+            m.director
+        FROM watch_history w
+        JOIN movies m ON w.movie_id = m.id
+        WHERE m.title LIKE ? OR m.original_title LIKE ?
+        ORDER BY DATE(w.watched_at) DESC, w.id DESC
+        LIMIT ?
+        """,
+        (f"%{query}%", f"%{query}%", limit),
+    )
+    rows = cursor.fetchall()
+    connection.close()
+
+    return [dict(row) for row in rows]
+

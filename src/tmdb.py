@@ -97,3 +97,43 @@ def get_movie_details(
     response.raise_for_status()
 
     return response.json()
+
+
+def get_movie_director(
+    tmdb_id: int,
+) -> str | None:
+    """
+    Obtiene el director (o directores) de una película a partir de sus créditos en TMDB.
+
+    Parameters
+    ----------
+    tmdb_id : int
+        Identificador de la película en TMDB.
+
+    Returns
+    -------
+    str | None
+        Nombres de los directores separados por coma, o None si no se encontró.
+    """
+    url = f"{TMDB_BASE_URL}/movie/{tmdb_id}/credits"
+    params = {
+        "api_key": TMDB_API_KEY,
+    }
+
+    try:
+        response = requests.get(
+            url,
+            params=params,
+            timeout=5,
+        )
+        response.raise_for_status()
+        crew = response.json().get("crew", [])
+        directors = []
+        for person in crew:
+            if person.get("job") == "Director":
+                name = person.get("name")
+                if name and name not in directors:
+                    directors.append(name)
+        return ", ".join(directors) if directors else None
+    except Exception:
+        return None
