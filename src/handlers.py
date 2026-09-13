@@ -4,8 +4,9 @@ Handlers del bot de Telegram.
 
 from datetime import date, datetime
 
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     ConversationHandler,
@@ -58,46 +59,54 @@ def parse_date_input(text: str) -> date | None:
     return None
 
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Responde al comando /start dando la bienvenida al usuario.
-    """
-    user_name = update.effective_user.first_name if update.effective_user else "cinéfilo"
-    message = (
-        f"¡Hola {user_name}! 👋🎬\n\n"
-        "Bienvenido a *Frank's Movie Tracker*.\n\n"
-        "Comandos disponibles:\n"
-        "• /add - Registrar una película que viste\n"
-        "• /recent - Ver tus últimas películas vistas\n"
-        "• /help - Ver información de ayuda"
-    )
-    await update.message.reply_text(message, parse_mode="Markdown")
+# --- Teclados reutilizables ---
 
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Muestra la lista de comandos disponibles.
-    """
-    message = (
-        "📌 *Comandos disponibles:*\n\n"
-        "/add - Registrar una nueva película vista\n"
-        "/recent - Ver tus últimas películas vistas\n"
-        "/cancel - Cancelar la operación en curso\n"
-        "/help - Mostrar este mensaje de ayuda"
-    )
-    await update.message.reply_text(message, parse_mode="Markdown")
+def _main_menu_keyboard() -> InlineKeyboardMarkup:
+    """Teclado con los comandos principales del bot."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎬 Registrar película", callback_data="menu_add")],
+        [InlineKeyboardButton("🕐 Películas recientes", callback_data="menu_recent")],
+        [InlineKeyboardButton("❓ Ayuda", callback_data="menu_help")],
+    ])
 
 
-async def recent_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """
-    Muestra las últimas películas registradas en SQLite.
-    """
-    recent = get_recent_watches(limit=5)
+def _date_keyboard() -> InlineKeyboardMarkup:
+    """Teclado con la opción rápida 'Hoy' para la fecha."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 Hoy", callback_data="date_today")],
+    ])
 
-    if not recent:
-        await update.message.reply_text("Aún no tienes películas registradas en tu historial.")
-        return
 
+def _review_keyboard() -> InlineKeyboardMarkup:
+    """Teclado con la opción de omitir el comentario."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏭️ Omitir", callback_data="review_skip")],
+    ])
+
+
+def _rewatch_keyboard() -> InlineKeyboardMarkup:
+    """Teclado Sí/No para rewatch."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Sí", callback_data="rewatch_yes"),
+            InlineKeyboardButton("❌ No", callback_data="rewatch_no"),
+        ]
+    ])
+
+
+def _confirmation_keyboard() -> InlineKeyboardMarkup:
+    """Teclado Guardar/Cancelar para confirmación final."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Guardar", callback_data="confirm_yes"),
+            InlineKeyboardButton("❌ Cancelar", callback_data="confirm_no"),
+        ]
+    ])
+
+
+def _format_recent_text(recent: list[dict]) -> str:
+    """Construye el texto formateado de películas recientes."""
     text = "🎬 *Tus últimas películas vistas:*\n\n"
     for item in recent:
         year = f" ({item['release_date'][:4]})" if item.get("release_date") else ""
@@ -111,11 +120,95 @@ async def recent_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if item.get("review"):
             text += f"💬 *\"{item['review']}\"*\n"
         text += "────────────────────\n"
+    return text
 
-    await update.message.reply_text(text, parse_mode="Markdown")
+
+# --- Comandos principales ---
+
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Responde al comando /start dando la bienvenida al usuario.
+    """
+    user_name = update.effective_user.first_name if update.effective_user else "cinéfilo"
+    message = (
+        f"¡Hola {user_name}! 👋🎬\n\n"
+        "Bienvenido a *Frank's Movie Tracker*.\n\n"
+        "¿Qué quieres hacer?"
+    )
+    await update.message.reply_text(
+        message, parse_mode="Markdown", reply_markup=_main_menu_keyboard()
+    )
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Muestra la lista de comandos disponibles con botones.
+    """
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎬 Registrar película", callback_data="menu_add")],
+        [InlineKeyboardButton("🕐 Películas recientes", callback_data="menu_recent")],
+        [InlineKeyboardButton("❌ Cancelar operación", callback_data="menu_cancel")],
+        [InlineKeyboardButton("❓ Ayuda", callback_data="menu_help")],
+    ])
+    await update.message.reply_text(
+        "📌 *Comandos disponibles:*",
+        parse_mode="Markdown",
+        reply_markup=keyboard,
+    )
+
+
+async def recent_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Muestra las últimas películas registradas en SQLite.
+    """
+    recent = get_recent_watches(limit=5)
+
+    if not recent:
+        await update.message.reply_text("Aún no tienes películas registradas en tu historial.")
+        return
+
+    await update.message.reply_text(_format_recent_text(recent), parse_mode="Markdown")
+
+
+async def menu_button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    Maneja los botones del menú principal que NO inician la conversación de /add.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "menu_recent":
+        recent = get_recent_watches(limit=5)
+        if not recent:
+            await query.edit_message_text(
+                "Aún no tienes películas registradas en tu historial."
+            )
+            return
+        await query.edit_message_text(
+            _format_recent_text(recent), parse_mode="Markdown"
+        )
+
+    elif query.data == "menu_help":
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎬 Registrar película", callback_data="menu_add")],
+            [InlineKeyboardButton("🕐 Películas recientes", callback_data="menu_recent")],
+            [InlineKeyboardButton("❌ Cancelar operación", callback_data="menu_cancel")],
+            [InlineKeyboardButton("❓ Ayuda", callback_data="menu_help")],
+        ])
+        await query.edit_message_text(
+            "📌 *Comandos disponibles:*",
+            parse_mode="Markdown",
+            reply_markup=keyboard,
+        )
+
+    elif query.data == "menu_cancel":
+        context.user_data.clear()
+        await query.edit_message_text("❌ Operación cancelada.")
 
 
 # --- Flujo de conversación de /add ---
+
 
 async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
@@ -130,9 +223,24 @@ async def add_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return WAITING_TITLE
 
 
+async def add_start_from_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Punto de entrada alternativo de /add desde un botón inline del menú.
+    """
+    query = update.callback_query
+    await query.answer()
+    context.user_data.clear()
+    await query.edit_message_text(
+        "🎬 *Registrar película*\n\n"
+        "¿Qué película viste? Escribe su título para buscarla (o /cancel para salir):",
+        parse_mode="Markdown",
+    )
+    return WAITING_TITLE
+
+
 async def add_receive_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Busca la película en TMDB y presenta hasta 5 opciones.
+    Busca la película en TMDB y presenta hasta 5 opciones como botones inline.
     """
     query = update.message.text.strip()
     results = search_movies(query)
@@ -148,31 +256,34 @@ async def add_receive_title(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     top_results = results[:5]
     context.user_data["search_results"] = top_results
 
-    text = "🔍 *Encontré los siguientes resultados:*\n\n"
-    for i, item in enumerate(top_results, start=1):
+    # Construimos un botón por cada resultado
+    keyboard = []
+    for i, item in enumerate(top_results):
         year = item.get("release_date", "")[:4]
         year_str = f" ({year})" if year else ""
-        text += f"*{i}.* {item.get('title', 'Sin título')}{year_str}\n"
+        label = f"{item.get('title', 'Sin título')}{year_str}"
+        keyboard.append([InlineKeyboardButton(label, callback_data=str(i))])
 
-    text += f"\n¿Cuál quieres registrar? Escribe el número del *1 al {len(top_results)}* (o /cancel):"
-    await update.message.reply_text(text, parse_mode="Markdown")
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "🔍 *Encontré los siguientes resultados:*\n\n"
+        "Selecciona la película que quieres registrar:",
+        parse_mode="Markdown",
+        reply_markup=reply_markup,
+    )
     return WAITING_SELECTION
 
 
 async def add_receive_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Procesa el número elegido, descarga la información completa de TMDB y pide la fecha.
+    Procesa la selección del botón inline, descarga la información completa de TMDB y pide la fecha.
     """
-    text = update.message.text.strip()
+    query = update.callback_query
+    await query.answer()
+
     search_results = context.user_data.get("search_results", [])
-
-    if not text.isdigit() or not (1 <= int(text) <= len(search_results)):
-        await update.message.reply_text(
-            f"⚠️ Por favor ingresa un número válido del 1 al {len(search_results)} (o /cancel):"
-        )
-        return WAITING_SELECTION
-
-    choice = int(text) - 1
+    choice = int(query.data)
     selected_raw = search_results[choice]
 
     # Obtenemos metadata completa desde TMDB y la transformamos a nuestro modelo
@@ -181,26 +292,35 @@ async def add_receive_selection(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data["movie"] = movie
 
     year = f" ({movie.release_date.year})" if movie.release_date else ""
-    await update.message.reply_text(
-        f"Seleccionaste: *{movie.title}*{year}\n\n"
-        "📅 ¿Cuándo la viste?\n"
-        "Puedes escribir la fecha como `12/09/2026`, `2026-09-12` o simplemente escribir *hoy*:",
+
+    # Editamos el mensaje original para mostrar la selección y eliminar los botones
+    await query.edit_message_text(
+        f"✅ Seleccionaste: *{escape_markdown(movie.title)}*{year}",
         parse_mode="Markdown",
+    )
+
+    # Enviamos la pregunta de la fecha con el botón "Hoy"
+    await query.message.reply_text(
+        "📅 ¿Cuándo la viste?\n"
+        "Puedes escribir la fecha como `12/09/2026`, `2026-09-12` o usar el botón:",
+        parse_mode="Markdown",
+        reply_markup=_date_keyboard(),
     )
     return WAITING_DATE
 
 
 async def add_receive_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Valida la fecha y solicita la calificación.
+    Valida la fecha ingresada como texto y solicita la calificación.
     """
     text = update.message.text.strip()
     parsed_date = parse_date_input(text)
 
     if not parsed_date:
         await update.message.reply_text(
-            "⚠️ Formato no reconocido. Escribe la fecha en formato `DD/MM/AAAA` (ej: 12/09/2026) o escribe *hoy*:",
+            "⚠️ Formato no reconocido. Escribe la fecha en formato `DD/MM/AAAA` (ej: 12/09/2026) o usa el botón:",
             parse_mode="Markdown",
+            reply_markup=_date_keyboard(),
         )
         return WAITING_DATE
 
@@ -213,9 +333,32 @@ async def add_receive_date(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     return WAITING_RATING
 
 
+async def add_receive_date_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Maneja el botón 'Hoy' para la fecha.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    today = date.today()
+    context.user_data["watched_at"] = today
+
+    await query.edit_message_text(
+        f"📅 Fecha seleccionada: *{today.strftime('%d/%m/%Y')}*",
+        parse_mode="Markdown",
+    )
+
+    await query.message.reply_text(
+        "⭐ ¿Qué calificación le das del 0 al 10?\n"
+        "(Puedes usar decimales, por ejemplo: `9.5` u `8`):",
+        parse_mode="Markdown",
+    )
+    return WAITING_RATING
+
+
 async def add_receive_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Valida la calificación y pide el comentario/reseña.
+    Valida la calificación y pide el comentario/reseña con botón de omitir.
     """
     text = update.message.text.strip().replace(",", ".")
 
@@ -232,15 +375,16 @@ async def add_receive_rating(update: Update, context: ContextTypes.DEFAULT_TYPE)
     context.user_data["rating"] = round(rating, 1)
     await update.message.reply_text(
         "💬 ¿Quieres agregar un comentario o reseña?\n"
-        "(Escribe tu comentario o responde *no* para omitir):",
+        "(Escribe tu comentario o usa el botón para omitir):",
         parse_mode="Markdown",
+        reply_markup=_review_keyboard(),
     )
     return WAITING_REVIEW
 
 
 async def add_receive_review(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Almacena el comentario y pregunta si fue un rewatch.
+    Almacena el comentario escrito por el usuario y pregunta si fue un rewatch.
     """
     text = update.message.text.strip()
 
@@ -250,19 +394,42 @@ async def add_receive_review(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.user_data["review"] = text
 
     await update.message.reply_text(
-        "🔁 ¿Fue un rewatch? (¿Ya la habías visto antes?)\n"
-        "Responde *si* o *no*:",
+        "🔁 ¿Fue un rewatch? (¿Ya la habías visto antes?)",
         parse_mode="Markdown",
+        reply_markup=_rewatch_keyboard(),
+    )
+    return WAITING_REWATCH
+
+
+async def add_receive_review_skip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """
+    Maneja el botón 'Omitir' para el comentario.
+    """
+    query = update.callback_query
+    await query.answer()
+
+    context.user_data["review"] = None
+
+    await query.edit_message_text(
+        "💬 Comentario: *Omitido*", parse_mode="Markdown"
+    )
+
+    await query.message.reply_text(
+        "🔁 ¿Fue un rewatch? (¿Ya la habías visto antes?)",
+        parse_mode="Markdown",
+        reply_markup=_rewatch_keyboard(),
     )
     return WAITING_REWATCH
 
 
 async def add_receive_rewatch(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Registra el rewatch y presenta la ficha resumen para confirmación.
+    Registra el rewatch desde botón inline y presenta la ficha resumen para confirmación.
     """
-    text = update.message.text.strip().lower()
-    rewatch = 1 if text in ("si", "sí", "s", "yes", "1") else 0
+    query = update.callback_query
+    await query.answer()
+
+    rewatch = 1 if query.data == "rewatch_yes" else 0
     context.user_data["rewatch"] = rewatch
 
     movie: Movie = context.user_data["movie"]
@@ -273,6 +440,10 @@ async def add_receive_rewatch(update: Update, context: ContextTypes.DEFAULT_TYPE
     rewatch_str = "Sí" if rewatch == 1 else "No"
     review_str = f'"{escape_markdown(review)}"' if review else "Sin comentario"
 
+    await query.edit_message_text(
+        f"🔁 Rewatch: *{rewatch_str}*", parse_mode="Markdown"
+    )
+
     summary = (
         "📋 *Resumen del registro:*\n\n"
         f"🎬 *Película:* {escape_markdown(movie.title)}\n"
@@ -281,30 +452,31 @@ async def add_receive_rewatch(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"⭐ *Calificación:* {rating}/10\n"
         f"🔁 *Rewatch:* {rewatch_str}\n"
         f"💬 *Comentario:* {review_str}\n\n"
-        "¿Deseas guardar este registro? (Responde *si* o *no*, o escribe /cancel):"
+        "¿Deseas guardar este registro?"
     )
 
-    await update.message.reply_text(summary, parse_mode="Markdown")
+    await query.message.reply_text(
+        summary, parse_mode="Markdown", reply_markup=_confirmation_keyboard()
+    )
     return WAITING_CONFIRMATION
 
 
 async def add_receive_confirmation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
-    Persiste en SQLite si el usuario confirma.
+    Persiste en SQLite si el usuario confirma mediante botón inline.
     """
-    text = update.message.text.strip().lower()
+    query = update.callback_query
+    await query.answer()
 
-    if text in ("si", "sí", "s", "yes", "guardar", "confirmar"):
+    if query.data == "confirm_yes":
         movie: Movie = context.user_data["movie"]
         watched_at: date = context.user_data["watched_at"]
         rating: float = context.user_data["rating"]
         review: str | None = context.user_data["review"]
         rewatch: int = context.user_data["rewatch"]
 
-        # 1. Guarda la película (o recupera la existente si ya estaba registrada)
         saved_movie = save_movie(movie)
 
-        # 2. Guarda el registro de visualización
         watch = WatchHistory(
             movie_id=saved_movie.id,
             watched_at=watched_at,
@@ -314,13 +486,13 @@ async def add_receive_confirmation(update: Update, context: ContextTypes.DEFAULT
         )
         save_watch_history(watch)
 
-        await update.message.reply_text(
+        await query.edit_message_text(
             f"✅ *¡{escape_markdown(saved_movie.title)} guardada exitosamente!*\n\n"
             "Puedes consultarla en cualquier momento con /recent.",
             parse_mode="Markdown",
         )
     else:
-        await update.message.reply_text("❌ Registro cancelado. No se guardaron cambios.")
+        await query.edit_message_text("❌ Registro cancelado. No se guardaron cambios.")
 
     context.user_data.clear()
     return ConversationHandler.END
@@ -340,28 +512,34 @@ def get_add_conversation_handler() -> ConversationHandler:
     Construye el ConversationHandler para el comando /add.
     """
     return ConversationHandler(
-        entry_points=[CommandHandler("add", add_start)],
+        entry_points=[
+            CommandHandler("add", add_start),
+            CallbackQueryHandler(add_start_from_button, pattern=r"^menu_add$"),
+        ],
+        per_message=False,
         states={
             WAITING_TITLE: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, add_receive_title)
             ],
             WAITING_SELECTION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, add_receive_selection)
+                CallbackQueryHandler(add_receive_selection, pattern=r"^[0-4]$")
             ],
             WAITING_DATE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, add_receive_date)
+                CallbackQueryHandler(add_receive_date_today, pattern=r"^date_today$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_receive_date),
             ],
             WAITING_RATING: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, add_receive_rating)
             ],
             WAITING_REVIEW: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, add_receive_review)
+                CallbackQueryHandler(add_receive_review_skip, pattern=r"^review_skip$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, add_receive_review),
             ],
             WAITING_REWATCH: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, add_receive_rewatch)
+                CallbackQueryHandler(add_receive_rewatch, pattern=r"^rewatch_(yes|no)$")
             ],
             WAITING_CONFIRMATION: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, add_receive_confirmation)
+                CallbackQueryHandler(add_receive_confirmation, pattern=r"^confirm_(yes|no)$")
             ],
         },
         fallbacks=[CommandHandler("cancel", cancel_command)],
