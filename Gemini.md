@@ -67,4 +67,3 @@ Además, quiero poder consultar posteriormente información como:
 - Otras estadísticas que podamos agregar posteriormente.
 
 ---
-loco
