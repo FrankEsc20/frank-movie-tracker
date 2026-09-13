@@ -1,19 +1,30 @@
-
 """
 Punto de entrada del bot de Telegram.
-
-La integración con Telegram se implementará posteriormente.
 """
+
+from telegram.ext import ApplicationBuilder, CommandHandler
+
+from config import TELEGRAM_BOT_TOKEN
+from handlers import help_command, start_command
 
 
 def main() -> None:
     """
-    Punto de entrada principal.
+    Inicia y ejecuta el bot de Telegram en modo polling.
     """
+    print("Iniciando Frank's Movie Tracker Bot...")
 
-    print(
-        "Telegram Bot todavía no está configurado."
-    )
+    # Construimos la aplicación con el token
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # Registramos los comandos básicos
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("help", help_command))
+
+    print("Bot en ejecución. Presiona Ctrl + C para detenerlo.")
+
+    # Escucha activa de mensajes
+    app.run_polling()
 
 
 if __name__ == "__main__":
