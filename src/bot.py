@@ -5,7 +5,7 @@ Punto de entrada del bot de Telegram.
 from telegram.ext import ApplicationBuilder, CommandHandler
 
 from config import TELEGRAM_BOT_TOKEN
-from handlers import help_command, start_command
+from handlers import help_command, recent_command, start_command
 
 
 def main() -> None:
@@ -17,9 +17,10 @@ def main() -> None:
     # Construimos la aplicación con el token
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    # Registramos los comandos básicos
+    # Registramos los comandos disponibles
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("recent", recent_command))
 
     print("Bot en ejecución. Presiona Ctrl + C para detenerlo.")
 
