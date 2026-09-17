@@ -1,36 +1,43 @@
 """
-Gestión de la base de datos SQLite.
+Gestión de la base de datos PostgreSQL (alojada en CasaOS / Ubuntu).
 """
 
-import sqlite3
 from datetime import date
-from pathlib import Path
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
+from config import (
+    DATABASE_URL,
+    DB_HOST,
+    DB_NAME,
+    DB_PASSWORD,
+    DB_PORT,
+    DB_USER,
+)
 from models import Movie, WatchHistory
 
 
-# Directorio donde se almacenará la base de datos.
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-
-# Ruta completa de la base de datos.
-DATABASE_PATH = DATA_DIR / "movies.db"
-
-
-def get_connection() -> sqlite3.Connection:
+def get_connection():
     """
-    Crea y devuelve una conexión a SQLite.
+    Crea y devuelve una conexión a la base de datos PostgreSQL.
+    Utiliza RealDictCursor para que los resultados se comporten como diccionarios.
     """
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if DATABASE_URL:
+        return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
-    connection = sqlite3.connect(DATABASE_PATH)
-    connection.row_factory = sqlite3.Row
-
-    return connection
+    return psycopg2.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        cursor_factory=RealDictCursor,
+    )
 
 
 def initialize_database() -> None:
     """
-    Crea las tablas necesarias si todavía no existen.
+    Crea las tablas necesarias en PostgreSQL si todavía no existen.
     """
     connection = get_connection()
     cursor = connection.cursor()
@@ -39,25 +46,25 @@ def initialize_database() -> None:
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS movies (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             tmdb_id INTEGER NOT NULL UNIQUE,
             imdb_id TEXT,
             title TEXT NOT NULL,
             original_title TEXT,
-            release_date TEXT,
+            release_date DATE,
             runtime INTEGER,
             overview TEXT,
             tagline TEXT,
             original_language TEXT,
             poster_path TEXT,
             backdrop_path TEXT,
-            budget INTEGER,
-            revenue INTEGER,
+            budget BIGINT,
+            revenue BIGINT,
             director TEXT,
             genres TEXT,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-        )
+            created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
         """
     )
 
@@ -65,22 +72,19 @@ def initialize_database() -> None:
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS watch_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            movie_id INTEGER NOT NULL,
-            watched_at TEXT NOT NULL,
-            rating REAL NOT NULL,
+            id SERIAL PRIMARY KEY,
+            movie_id INTEGER NOT NULL REFERENCES movies(id) ON DELETE CASCADE,
+            watched_at DATE NOT NULL,
+            rating NUMERIC(3, 1) NOT NULL,
             review TEXT,
             rewatch INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-            FOREIGN KEY (movie_id)
-                REFERENCES movies(id)
-                ON DELETE CASCADE
-        )
+            created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
         """
     )
 
     connection.commit()
+    cursor.close()
     connection.close()
 
 
@@ -93,14 +97,15 @@ def save_movie(movie: Movie) -> Movie:
     cursor = connection.cursor()
 
     # Verificamos si ya existe
-    cursor.execute("SELECT * FROM movies WHERE tmdb_id = ?", (movie.tmdb_id,))
+    cursor.execute("SELECT * FROM movies WHERE tmdb_id = %s", (movie.tmdb_id,))
     row = cursor.fetchone()
 
     if row:
+        cursor.close()
         connection.close()
         return Movie(**dict(row))
 
-    # Inserción de nueva película
+    # Inserción de nueva película con RETURNING id
     cursor.execute(
         """
         INSERT INTO movies (
@@ -119,14 +124,15 @@ def save_movie(movie: Movie) -> Movie:
             revenue,
             director,
             genres
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id
         """,
         (
             movie.tmdb_id,
             movie.imdb_id,
             movie.title,
             movie.original_title,
-            movie.release_date.isoformat() if movie.release_date else None,
+            movie.release_date,
             movie.runtime,
             movie.overview,
             movie.tagline,
@@ -140,8 +146,10 @@ def save_movie(movie: Movie) -> Movie:
         ),
     )
 
-    movie.id = cursor.lastrowid
+    result = cursor.fetchone()
+    movie.id = result["id"]
     connection.commit()
+    cursor.close()
     connection.close()
 
     return movie
@@ -153,8 +161,9 @@ def get_movie_by_tmdb_id(tmdb_id: int) -> Movie | None:
     """
     connection = get_connection()
     cursor = connection.cursor()
-    cursor.execute("SELECT * FROM movies WHERE tmdb_id = ?", (tmdb_id,))
+    cursor.execute("SELECT * FROM movies WHERE tmdb_id = %s", (tmdb_id,))
     row = cursor.fetchone()
+    cursor.close()
     connection.close()
 
     if row:
@@ -164,12 +173,13 @@ def get_movie_by_tmdb_id(tmdb_id: int) -> Movie | None:
 
 def get_movie_by_id(movie_id: int) -> Movie | None:
     """
-    Busca una película por su ID primario en la base de datos local.
+    Busca una película por su ID primario en la base de datos.
     """
     connection = get_connection()
     cursor = connection.cursor()
-    cursor.execute("SELECT * FROM movies WHERE id = ?", (movie_id,))
+    cursor.execute("SELECT * FROM movies WHERE id = %s", (movie_id,))
     row = cursor.fetchone()
+    cursor.close()
     connection.close()
 
     if row:
@@ -179,12 +189,13 @@ def get_movie_by_id(movie_id: int) -> Movie | None:
 
 def get_all_movies() -> list[Movie]:
     """
-    Devuelve todas las películas almacenadas en la base de datos.
+    Devuelve todas las películas almacenadas en la base de datos ordenadas por título.
     """
     connection = get_connection()
     cursor = connection.cursor()
     cursor.execute("SELECT * FROM movies ORDER BY title ASC")
     rows = cursor.fetchall()
+    cursor.close()
     connection.close()
 
     return [Movie(**dict(row)) for row in rows]
@@ -205,19 +216,22 @@ def save_watch_history(watch: WatchHistory) -> WatchHistory:
             rating,
             review,
             rewatch
-        ) VALUES (?, ?, ?, ?, ?)
+        ) VALUES (%s, %s, %s, %s, %s)
+        RETURNING id
         """,
         (
             watch.movie_id,
-            watch.watched_at.isoformat() if isinstance(watch.watched_at, date) else str(watch.watched_at),
+            watch.watched_at,
             watch.rating,
             watch.review,
             watch.rewatch,
         ),
     )
 
-    watch.id = cursor.lastrowid
+    result = cursor.fetchone()
+    watch.id = result["id"]
     connection.commit()
+    cursor.close()
     connection.close()
 
     return watch
@@ -233,12 +247,13 @@ def get_watch_history_for_movie(movie_id: int) -> list[WatchHistory]:
     cursor.execute(
         """
         SELECT * FROM watch_history
-        WHERE movie_id = ?
+        WHERE movie_id = %s
         ORDER BY watched_at DESC, id DESC
         """,
         (movie_id,),
     )
     rows = cursor.fetchall()
+    cursor.close()
     connection.close()
 
     return [WatchHistory(**dict(row)) for row in rows]
@@ -246,8 +261,8 @@ def get_watch_history_for_movie(movie_id: int) -> list[WatchHistory]:
 
 def get_recent_watches(limit: int = 10) -> list[dict]:
     """
-    Devuelve las visualizaciones más recientes junto con la información
-    básica de la película.
+    Devuelve las visualizaciones más recientes ordenadas por fecha de visualización
+    (de más reciente a más antigua) junto con la información de la película.
     """
     connection = get_connection()
     cursor = connection.cursor()
@@ -269,12 +284,13 @@ def get_recent_watches(limit: int = 10) -> list[dict]:
             m.director
         FROM watch_history w
         JOIN movies m ON w.movie_id = m.id
-        ORDER BY DATE(w.watched_at) DESC, w.id DESC
-        LIMIT ?
+        ORDER BY w.watched_at DESC, w.id DESC
+        LIMIT %s
         """,
         (limit,),
     )
     rows = cursor.fetchall()
+    cursor.close()
     connection.close()
 
     return [dict(row) for row in rows]
@@ -307,11 +323,12 @@ def get_watch_by_id(watch_id: int) -> dict | None:
             m.genres
         FROM watch_history w
         JOIN movies m ON w.movie_id = m.id
-        WHERE w.id = ?
+        WHERE w.id = %s
         """,
         (watch_id,),
     )
     row = cursor.fetchone()
+    cursor.close()
     connection.close()
 
     if row:
@@ -327,10 +344,11 @@ def delete_watch_by_id(watch_id: int) -> bool:
     connection = get_connection()
     cursor = connection.cursor()
 
-    cursor.execute("DELETE FROM watch_history WHERE id = ?", (watch_id,))
+    cursor.execute("DELETE FROM watch_history WHERE id = %s", (watch_id,))
     deleted = cursor.rowcount > 0
 
     connection.commit()
+    cursor.close()
     connection.close()
 
     return deleted
@@ -351,22 +369,21 @@ def update_watch_history(
     params = []
 
     if watched_at is not None:
-        val = watched_at.isoformat() if isinstance(watched_at, date) else str(watched_at)
-        updates.append("watched_at = ?")
-        params.append(val)
+        updates.append("watched_at = %s")
+        params.append(watched_at)
 
     if rating is not None:
-        updates.append("rating = ?")
+        updates.append("rating = %s")
         params.append(rating)
 
     if clear_review:
         updates.append("review = NULL")
     elif review is not None:
-        updates.append("review = ?")
+        updates.append("review = %s")
         params.append(review)
 
     if rewatch is not None:
-        updates.append("rewatch = ?")
+        updates.append("rewatch = %s")
         params.append(rewatch)
 
     if not updates:
@@ -377,11 +394,12 @@ def update_watch_history(
     connection = get_connection()
     cursor = connection.cursor()
 
-    sql = f"UPDATE watch_history SET {', '.join(updates)} WHERE id = ?"
+    sql = f"UPDATE watch_history SET {', '.join(updates)} WHERE id = %s"
     cursor.execute(sql, tuple(params))
     updated = cursor.rowcount > 0
 
     connection.commit()
+    cursor.close()
     connection.close()
 
     return updated
@@ -390,6 +408,7 @@ def update_watch_history(
 def search_watches_by_title(query: str, limit: int = 10) -> list[dict]:
     """
     Busca en el historial de visualizaciones por coincidencia en el título de la película.
+    Utiliza ILIKE para búsqueda insensible a mayúsculas y minúsculas.
     """
     connection = get_connection()
     cursor = connection.cursor()
@@ -411,14 +430,14 @@ def search_watches_by_title(query: str, limit: int = 10) -> list[dict]:
             m.director
         FROM watch_history w
         JOIN movies m ON w.movie_id = m.id
-        WHERE m.title LIKE ? OR m.original_title LIKE ?
-        ORDER BY DATE(w.watched_at) DESC, w.id DESC
-        LIMIT ?
+        WHERE m.title ILIKE %s OR m.original_title ILIKE %s
+        ORDER BY w.watched_at DESC, w.id DESC
+        LIMIT %s
         """,
         (f"%{query}%", f"%{query}%", limit),
     )
     rows = cursor.fetchall()
+    cursor.close()
     connection.close()
 
     return [dict(row) for row in rows]
-

@@ -20,6 +20,14 @@ TMDB_API_KEY = os.getenv("TMDB_API_KEY")
 # Token del bot de Telegram
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
+# Configuración de PostgreSQL (en CasaOS / Ubuntu)
+DATABASE_URL = os.getenv("DATABASE_URL")
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = int(os.getenv("DB_PORT", "5432"))
+DB_NAME = os.getenv("DB_NAME", "movies_tracker")
+DB_USER = os.getenv("DB_USER", "frank")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+
 
 # Validamos que existan las credenciales necesarias antes de ejecutar
 if not TMDB_API_KEY:
