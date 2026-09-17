@@ -87,7 +87,7 @@ def format_watch_card(w: dict, index: int | None = None) -> str:
     """
     Formatea de manera completa y legible un registro de visualización con todos sus datos.
     """
-    year = f" ({w['release_date'][:4]})" if w.get("release_date") else ""
+    year = f" ({str(w['release_date'])[:4]})" if w.get("release_date") else ""
     rewatch_str = "Sí" if w.get("rewatch") == 1 else "No"
     rev = f'"{escape_markdown(w["review"])}"' if w.get("review") else "_Sin comentario_"
     idx_str = f"📌 *#{index} — *" if index is not None else "🎬 *"
